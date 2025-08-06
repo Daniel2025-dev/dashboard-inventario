@@ -8,7 +8,7 @@ st.set_page_config(page_title="Dashboard de Inventario", layout="wide")
 st.title("📦 Dashboard de Inventario - Warehousing")
 
 # Ruta del archivo Excel
-RUTA_ARCHIVO = r"C:\Users\dflores\Warehousing Valle Grande SA\Operaciones - 001 CONTROL STOCK\Herramientas de control stock\2025\Dashboard_Lista de tareas 2025.xlsx"
+RUTA_ARCHIVO = r"Dashboard_Lista de tareas 2025.xlsx"
 
 
 @st.cache_data
@@ -197,5 +197,6 @@ fig_estado = px.bar(
     title="📊 Inventarios Únicos por Tipo y Estado"
 )
 st.plotly_chart(fig_estado, use_container_width=True)
+
 
 
