@@ -8,7 +8,7 @@ st.set_page_config(page_title="Dashboard de Inventario", layout="wide")
 st.title("📦 Dashboard de Inventario - Warehousing")
 
 # Ruta del archivo Excel
-RUTA_ARCHIVO = r"Dashboard_Lista de tareas 2025.xlsx"
+RUTA_ARCHIVO = r"C:\Users\dflores\Warehousing Valle Grande SA\Operaciones - 001 CONTROL STOCK\Herramientas de control stock\2025\Dashboard_Lista de tareas 2025.xlsx"
 
 
 @st.cache_data
@@ -172,5 +172,30 @@ st.dataframe(resumen_tipo_de_inventario, use_container_width=True)
 resumen_cliente = df.groupby("cliente")["contenedores_contados"].sum().reset_index().sort_values(by="contenedores_contados", ascending=False)
 st.subheader("📋 Resumen de Contenedores contados por Cliente")
 st.dataframe(resumen_cliente, use_container_width=True)
+
+# 📄 Resumen por tipo y estado de inventario
+resumen_tipo_estado = (
+    df.groupby(["tipo_de_inventario", "estado_de_inventario"])["codigo_inventario"]
+    .nunique()
+    .reset_index()
+    .sort_values(by="codigo_inventario", ascending=False)
+)
+
+resumen_tipo_estado.columns = ["Tipo de Inventario", "Estado de Inventario", "Inventarios Únicos"]
+
+st.subheader("📋 Resumen por Tipo y Estado de Inventario")
+st.dataframe(resumen_tipo_estado, use_container_width=True)
+
+import plotly.express as px
+
+fig_estado = px.bar(
+    resumen_tipo_estado,
+    x="Tipo de Inventario",
+    y="Inventarios Únicos",
+    color="Estado de Inventario",
+    barmode="group",
+    title="📊 Inventarios Únicos por Tipo y Estado"
+)
+st.plotly_chart(fig_estado, use_container_width=True)
 
 
