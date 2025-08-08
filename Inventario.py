@@ -8,7 +8,7 @@ st.set_page_config(page_title="Dashboard de Inventario", layout="wide")
 st.title("📦 Dashboard de Inventario - Warehousing")
 
 # Ruta del archivo Excel
-RUTA_ARCHIVO = r"Dashboard_Lista de tareas 2025.xlsx"
+RUTA_ARCHIVO = r"C:\Users\dflores\Warehousing Valle Grande SA\Operaciones - 001 CONTROL STOCK\Herramientas de control stock\2025\Dashboard_Lista de tareas 2025.xlsx"
 
 
 @st.cache_data
@@ -115,19 +115,35 @@ col2.metric("✅ % promedio completado", f"{df['%_completado'].mean()*100:.1f}%"
 col3.metric("📦 Inventarios únicos", df["codigo_inventario"].nunique())
 
 # 📊 Indicadores por Contador
-resumen = df.groupby("contador").agg(
+# Asegurar nombre correcto de la columna de completado
+if "%_completado" in df.columns:
+    col_completado = "%_completado"
+elif "porcentaje_completado" in df.columns:
+    col_completado = "porcentaje_completado"
+else:
+    st.error("❌ No se encontró la columna de porcentaje completado en el archivo.")
+    st.stop()
+
+resumen = df.groupby("contador", dropna=False).agg(
     total_horas=("horas_decimal", "sum"),
     contenedores_contados=("contenedores_contados", "sum"),
     ubicaciones_contadas=("ubicaciones_contadas", "sum"),
-    productividad_contenedores=("contenedores_contados", lambda x: round(x.sum() / df["horas_decimal"].sum(), 2)),
-    productividad_ubicaciones=("ubicaciones_contadas", lambda x: round(x.sum() / df["horas_decimal"].sum(), 2)),
-    porcentaje_completado=("%_completado", "mean"),
+    # Productividad calculada por contador, no global
+    productividad_contenedores=("contenedores_contados", lambda x: round(x.sum() / (df.loc[x.index, "horas_decimal"].sum() or 1), 2)),
+    productividad_ubicaciones=("ubicaciones_contadas", lambda x: round(x.sum() / (df.loc[x.index, "horas_decimal"].sum() or 1), 2)),
+    porcentaje_completado=(col_completado, "mean"),
     clientes=("cliente", "nunique")
 ).reset_index()
 
-resumen["porcentaje_completado"] = resumen["porcentaje_completado"] * 100
-resumen = resumen.round(2)
+# Conversión de % a formato legible
+resumen["porcentaje_completado"] = (resumen["porcentaje_completado"] * 100).round(2)
 
+# Redondeos y enteros
+resumen["total_horas"] = resumen["total_horas"].round(2)
+resumen["contenedores_contados"] = resumen["contenedores_contados"].astype(int)
+resumen["ubicaciones_contadas"] = resumen["ubicaciones_contadas"].astype(int)
+
+# Mostrar
 st.subheader("📊 Indicadores por Contador")
 st.dataframe(resumen, use_container_width=True)
 
@@ -192,11 +208,27 @@ fig_estado = px.bar(
     resumen_tipo_estado,
     x="Tipo de Inventario",
     y="Inventarios Únicos",
-    color="Estado de Inventario",
+    color="Estado de Inventario",  # Colorea automáticamente por estado
     barmode="group",
-    title="📊 Inventarios Únicos por Tipo y Estado"
+    title="📊 Inventarios Únicos por Tipo y Estado",
+    text="Inventarios Únicos"  # Mostrar etiquetas
 )
-st.plotly_chart(fig_estado, use_container_width=True)
 
+# Configurar etiquetas dentro de las barras
+fig_estado.update_traces(
+    texttemplate='%{text:.0f}',  # Mostrar como número entero
+    textposition='inside'
+)
+
+# Mejorar legibilidad del gráfico
+fig_estado.update_layout(
+    xaxis_title="Tipo de Inventario",
+    yaxis_title="Inventarios Únicos",
+    legend_title="Estado de Inventario",
+    uniformtext_minsize=8,
+    uniformtext_mode='hide'
+)
+
+st.plotly_chart(fig_estado, use_container_width=True)
 
 
