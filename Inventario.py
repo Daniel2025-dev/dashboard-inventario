@@ -8,7 +8,7 @@ st.set_page_config(page_title="Dashboard de Inventario", layout="wide")
 st.title("📦 Dashboard de Inventario - Warehousing")
 
 # Ruta del archivo Excel
-RUTA_ARCHIVO = r"Dashboard_Lista de tareas 2025.xlsx"
+RUTA_ARCHIVO = r"C:\Users\dflores\Warehousing Valle Grande SA\Operaciones - 001 CONTROL STOCK\Herramientas de control stock\2025\Dashboard_Lista de tareas 2025.xlsx"
 
 
 @st.cache_data
@@ -124,28 +124,46 @@ else:
     st.error("❌ No se encontró la columna de porcentaje completado en el archivo.")
     st.stop()
 
-resumen = df.groupby("contador", dropna=False).agg(
-    total_horas=("horas_decimal", "sum"),
-    contenedores_contados=("contenedores_contados", "sum"),
-    ubicaciones_contadas=("ubicaciones_contadas", "sum"),
-    # Productividad calculada por contador, no global
-    productividad_contenedores=("contenedores_contados", lambda x: round(x.sum() / (df.loc[x.index, "horas_decimal"].sum() or 1), 2)),
-    productividad_ubicaciones=("ubicaciones_contadas", lambda x: round(x.sum() / (df.loc[x.index, "horas_decimal"].sum() or 1), 2)),
-    porcentaje_completado=(col_completado, "mean"),
-    clientes=("cliente", "nunique")
-).reset_index()
+resumen = (
+    df.groupby("contador", dropna=False)
+      .agg(
+          horas_totales=("horas_decimal", "sum"),      # para productividad
+          horas_promedio=("horas_decimal", "mean"),    # lo que quieres mostrar
+          contenedores_contados=("contenedores_contados", "sum"),
+          ubicaciones_contadas=("ubicaciones_contadas", "sum"),
+          porcentaje_completado=(col_completado, "mean"),
+          clientes=("cliente", "nunique")
+      )
+      .reset_index()
+)
 
-# Conversión de % a formato legible
+# Productividad POR CONTADOR (usa horas_totales del propio contador)
+resumen["productividad_contenedores"] = (
+    resumen["contenedores_contados"] / resumen["horas_totales"].replace(0, pd.NA)
+)
+resumen["productividad_ubicaciones"] = (
+    resumen["ubicaciones_contadas"] / resumen["horas_totales"].replace(0, pd.NA)
+)
+
+# Mostrar % en formato legible
 resumen["porcentaje_completado"] = (resumen["porcentaje_completado"] * 100).round(2)
 
-# Redondeos y enteros
-resumen["total_horas"] = resumen["total_horas"].round(2)
+# Formateo final
+resumen["horas_promedio"] = resumen["horas_promedio"].round(2)
+resumen["productividad_contenedores"] = resumen["productividad_contenedores"].round(2)
+resumen["productividad_ubicaciones"] = resumen["productividad_ubicaciones"].round(2)
 resumen["contenedores_contados"] = resumen["contenedores_contados"].astype(int)
 resumen["ubicaciones_contadas"] = resumen["ubicaciones_contadas"].astype(int)
 
-# Mostrar
+# Si quieres que la columna visible se llame 'total_horas' pero sea el PROMEDIO:
+resumen = resumen.rename(columns={"horas_promedio": "total_horas"})
+
+# (Opcional) Si no quieres mostrar horas_totales en la tabla final:
+# resumen = resumen.drop(columns=["horas_totales"])
+
 st.subheader("📊 Indicadores por Contador")
 st.dataframe(resumen, use_container_width=True)
+
 
 # 📈 Visualizaciones
 with st.expander("📈 Visualizaciones Detalladas"):
@@ -230,6 +248,5 @@ fig_estado.update_layout(
 )
 
 st.plotly_chart(fig_estado, use_container_width=True)
-
 
 
