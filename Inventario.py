@@ -15,6 +15,7 @@ import os
 from io import BytesIO
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 
 # ======================================================
@@ -171,7 +172,7 @@ px.defaults.height = 420
 # ==========================================
 # 📥 CARGA DE DATOS
 # ==========================================
-RELATIVE_EXCEL = "Dashboard_Lista de tareas 2025.xlsx"
+RELATIVE_EXCEL = r"C:\Users\dflores\Warehousing Valle Grande SA\Operaciones - 001 CONTROL STOCK\Herramientas de control stock\2025\Dashboard_Lista de tareas 2025.xlsx"
 
 @st.cache_data
 def leer_excel_desde_bytes(b: bytes) -> pd.DataFrame:
@@ -386,16 +387,27 @@ resumen = (
           clientes=("cliente","nunique")
       ).reset_index()
 )
-resumen["productividad_contenedores"] = resumen["contenedores_contados"] / resumen["horas_totales"].replace(0, pd.NA)
-resumen["productividad_ubicaciones"] = resumen["ubicaciones_contadas"] / resumen["horas_totales"].replace(0, pd.NA)
 
+# Productividades → usa np.nan para evitar dtype object
+resumen["productividad_contenedores"] = resumen["contenedores_contados"] / resumen["horas_totales"].replace(0, np.nan)
+resumen["productividad_ubicaciones"] = resumen["ubicaciones_contadas"] / resumen["horas_totales"].replace(0, np.nan)
+
+# ---------- COERCE A NUMÉRICO (evita TypeError en round) ----------
+cols_num = [
+    "horas_totales","horas_promedio","contenedores_contados","ubicaciones_contadas",
+    "porcentaje_completado","productividad_contenedores","productividad_ubicaciones"
+]
+for c in cols_num:
+    resumen[c] = pd.to_numeric(resumen[c], errors="coerce")
+
+# Formateo
 resumen_fmt = resumen.copy()
 resumen_fmt["porcentaje_completado"] = (resumen_fmt["porcentaje_completado"]*100).round(2)
 resumen_fmt["horas_promedio"] = resumen_fmt["horas_promedio"].round(2)
 resumen_fmt["productividad_contenedores"] = resumen_fmt["productividad_contenedores"].round(2)
 resumen_fmt["productividad_ubicaciones"] = resumen_fmt["productividad_ubicaciones"].round(2)
-resumen_fmt["contenedores_contados"] = resumen_fmt["contenedores_contados"].astype(int)
-resumen_fmt["ubicaciones_contadas"] = resumen_fmt["ubicaciones_contadas"].astype(int)
+resumen_fmt["contenedores_contados"] = resumen_fmt["contenedores_contados"].fillna(0).astype(int)
+resumen_fmt["ubicaciones_contadas"] = resumen_fmt["ubicaciones_contadas"].fillna(0).astype(int)
 
 st.markdown("### 📊 Indicadores por Contador")
 st.dataframe(
@@ -421,10 +433,10 @@ tab1, tab2 = st.tabs(["📈 Visualizaciones", "📋 Resúmenes"])
 
 with tab1:
     st.markdown('<div class="block">', unsafe_allow_html=True)
-    orden_hp = resumen_fmt.sort_values("horas_promedio")
+    orden_hp = resumen_fmt.sort_values("prom_horas")
     fig1 = px.bar(
-        orden_hp, x="horas_promedio", y="contador", orientation="h", color="contador",
-        text=orden_hp["horas_promedio"].apply(lambda v: f"{v:.2f} h"),
+        orden_hp, x="prom_horas", y="contador", orientation="h", color="contador",
+        text=orden_hp["prom_horas"].apply(lambda v: f"{(0 if pd.isna(v) else v):.2f} h"),
         title="⏱ Promedio de horas por contador"
     )
     fig1.update_traces(textposition="inside",
@@ -569,36 +581,19 @@ st.download_button(
     use_container_width=True
 )
 
-# ===== OVERRIDE FINAL PARA ASEGURAR AZUL EN CHIPS DEL SIDEBAR =====
+# ===== ULTRA-OVERRIDE FINAL PARA ASEGURAR AZUL EN CHIPS DEL SIDEBAR =====
 st.markdown("""
 <style>
-section[data-testid="stSidebar"] .stMultiSelect div[data-baseweb="tag"],
-section[data-testid="stSidebar"] div[data-baseweb="tag"]{
-  background:#2563eb !important;
-  border:1px solid #3b82f6 !important;
-  color:#ffffff !important;
-}
-section[data-testid="stSidebar"] div[data-baseweb="tag"] span{ color:#ffffff !important; }
-section[data-testid="stSidebar"] div[data-baseweb="tag"] svg{ fill:#bfdbfe !important; }
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<style>
-/* ====== ULTRA-OVERRIDE CHIPS SIDEBAR (azul) ======
-   Debe ir al final del archivo para ganar la cascada. */
-
-/* Caja del multiselect */
 section[data-testid="stSidebar"] .stMultiSelect > div > div {
   background-color: #1e293b !important;
   border: 1px solid #3b4252 !important;
   border-radius: 12px !important;
   box-shadow: none !important;
 }
-
-/* Cubre cualquier elemento (div/span) marcado como tag */
-section[data-testid="stSidebar"] [data-baseweb="tag"] {
-  background-color: #2563eb !important;   /* AZUL */
+section[data-testid="stSidebar"] [data-baseweb="tag"],
+section[data-testid="stSidebar"] span[data-baseweb="tag"],
+section[data-testid="stSidebar"] div[data-baseweb="tag"]{
+  background-color: #2563eb !important;
   background: #2563eb !important;
   border: 1px solid #3b82f6 !important;
   color: #ffffff !important;
@@ -607,28 +602,13 @@ section[data-testid="stSidebar"] [data-baseweb="tag"] {
   font-weight: 600 !important;
   letter-spacing: .2px !important;
 }
-
-/* Por si el Tag usa <span> en vez de <div> */
-section[data-testid="stSidebar"] span[data-baseweb="tag"],
-section[data-testid="stSidebar"] div[data-baseweb="tag"] {
-  background-color: #2563eb !important;
-  background: #2563eb !important;
-  border: 1px solid #3b82f6 !important;
-  color: #ffffff !important;
-}
-
-/* Texto e ícono dentro del chip */
 section[data-testid="stSidebar"] [data-baseweb="tag"] span { color: #ffffff !important; }
 section[data-testid="stSidebar"] [data-baseweb="tag"] svg  { fill:  #bfdbfe !important; }
-
-/* Estado hover/active */
 section[data-testid="stSidebar"] [data-baseweb="tag"]:hover {
   background-color: #1d4ed8 !important;
   background: #1d4ed8 !important;
   border-color: #60a5fa !important;
 }
-
-/* Dropdown oscuro (coherente) */
 section[data-testid="stSidebar"] div[role="listbox"] {
   background:#0b1220 !important; border:1px solid #334155 !important;
 }
@@ -637,10 +617,6 @@ section[data-testid="stSidebar"] div[role="option"][aria-selected="true"] {
   background:#1d4ed8 !important; color:#ffffff !important;
 }
 </style>
-            
 """, unsafe_allow_html=True)
 
 # ========== FIN ==========
-
-
-
