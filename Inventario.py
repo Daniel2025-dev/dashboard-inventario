@@ -171,7 +171,7 @@ px.defaults.height = 420
 # ==========================================
 # 📥 CARGA DE DATOS
 # ==========================================
-RELATIVE_EXCEL = Dashboard_Lista de tareas 2025.xlsx
+RELATIVE_EXCEL = "Dashboard_Lista de tareas 2025.xlsx"
 
 @st.cache_data
 def leer_excel_desde_bytes(b: bytes) -> pd.DataFrame:
@@ -641,6 +641,7 @@ section[data-testid="stSidebar"] div[role="option"][aria-selected="true"] {
 """, unsafe_allow_html=True)
 
 # ========== FIN ==========
+
 
 
 
