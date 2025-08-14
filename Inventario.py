@@ -1,253 +1,645 @@
+# inventario.py
+# Dashboard de Inventario con UI moderna (Streamlit + Plotly)
+# - Carga Excel desde ruta relativa o uploader
+# - Normaliza columnas (maneja acentos y variantes)
+# - Filtros con sidebar modernizada (alto contraste)
+# - KPIs en cards, indicadores por contador (promedio de horas, productividad correcta)
+# - Visualizaciones con etiquetas internas y paleta actual
+# - Resúmenes por tipo/estado/cliente con tablas y gráficos
+# - Código listo para ejecutarse localmente o en Streamlit Cloud
+# - Mejora visual sustancial + KPIs adicionales + formato numérico con puntos y %.
+# - Ajustes: tasa de cumplimiento extendida, tooltips backlog, export con openpyxl.
+# - Sidebar: recuadros y chips de filtros con paleta oscura, cambio visible y total.
+
+import os
+from io import BytesIO
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
 
-# Configuración
-st.set_page_config(page_title="Dashboard de Inventario", layout="wide")
-st.title("📦 Dashboard de Inventario - Warehousing")
+# ======================================================
+# 🌈 CONFIGURACIÓN GENERAL + TEMA/ESTILOS
+# ======================================================
+st.set_page_config(page_title="Dashboard de Inventario", layout="wide", page_icon="📦")
 
-# Ruta del archivo Excel
-RUTA_ARCHIVO = r"Dashboard_Lista de tareas 2025.xlsx"
+# --------- UTILIDADES DE FORMATO (puntos y %) ----------
+def num_dot(x, decimals=0):
+    try:
+        if pd.isna(x):
+            x = 0
+        fmt = f"{{:,.{decimals}f}}".format(float(x))
+        # Reemplaza comas por puntos (miles) y deja punto decimal
+        fmt = fmt.replace(",", "X").replace(".", ",").replace("X", ".")
+        if decimals == 0:
+            fmt = fmt.replace(",00", "")
+        return fmt
+    except Exception:
+        return str(x)
 
+def pct(x, decimals=1):
+    try:
+        v = float(x) * 100 if abs(float(x)) <= 1 else float(x)  # acepta 0.87 o 87
+        fmt = f"{v:.{decimals}f}"
+        return f"{fmt}%"
+    except Exception:
+        return "0%"
+
+def series_num_dot(s, decimals=0):
+    return s.fillna(0).apply(lambda v: num_dot(v, decimals))
+
+# --------- CSS (incluye ajustes de FILTERS en sidebar) ----------
+st.markdown("""
+<style>
+/* Tipografía base */
+html, body, [class*="css"] { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+.main { padding-top: 0rem; }
+
+/* Header superior */
+.app-header {
+  background: linear-gradient(90deg, #0ea5e9 0%, #6366f1 100%);
+  color: white; padding: 18px 24px; border-radius: 16px; margin-bottom: 18px;
+  display: flex; align-items: center; gap: 12px;
+}
+.app-header h1 { margin: 0; font-size: 1.55rem; font-weight: 800; letter-spacing: .2px; }
+
+/* KPI Cards */
+.kpi {
+  background: white; border: 1px solid #eef0f5; border-radius: 14px; padding: 16px;
+  box-shadow: 0 6px 18px rgba(2,6,23,.06);
+}
+.kpi .label { color: #64748b; font-size: .85rem; margin-bottom: 6px; }
+.kpi .value { font-size: 1.6rem; font-weight: 800; color: #0f172a; }
+
+/* Contenedor de gráfico / bloque */
+.block {
+  background: white; border: 1px solid #eef0f5; border-radius: 16px; padding: 14px 14px 8px;
+  box-shadow: 0 6px 20px rgba(2,6,23,.06); margin-bottom: 12px;
+}
+
+/* ===== Sidebar oscuro ===== */
+section[data-testid="stSidebar"]{
+  background: linear-gradient(180deg,#0b1220 0%, #0c1325 100%);
+  border-right: 1px solid #0f172a;
+}
+section[data-testid="stSidebar"] *{ color:#e5e7eb !important; }
+section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3{
+  color:#f8fafc !important; letter-spacing:.2px;
+}
+
+/* ====== CAMPOS de filtros (Selectbox / Multiselect) ====== */
+/* Recuadro del input */
+section[data-testid="stSidebar"] .stSelectbox > div > div,
+section[data-testid="stSidebar"] .stMultiSelect > div > div,
+section[data-testid="stSidebar"] .stDateInput > div > div{
+  background:#1e293b !important;          /* fondo oscuro armonizado */
+  border:1px solid #3b4252 !important;     /* borde gris azulado */
+  border-radius:12px !important;
+  box-shadow:none !important;
+}
+
+/* Placeholder y texto dentro del input */
+section[data-testid="stSidebar"] input,
+section[data-testid="stSidebar"] textarea{
+  color:#e5e7eb !important;
+}
+section[data-testid="stSidebar"] input::placeholder{
+  color:#9ca3af !important;
+}
+
+/* Chips (etiquetas) dentro del multiselect */
+section[data-testid="stSidebar"] div[data-baseweb="tag"]{
+  background:#2563eb !important;          /* azul principal */
+  border:1px solid #3b82f6 !important;
+  color:#ffffff !important;                /* texto BLANCO */
+  border-radius:8px !important;
+  padding:.22rem .5rem !important;
+  font-weight:600; letter-spacing:.2px;
+}
+section[data-testid="stSidebar"] div[data-baseweb="tag"]:hover{
+  background:#1d4ed8 !important; border-color:#60a5fa !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="tag"] span{ color:#ffffff !important; }
+section[data-testid="stSidebar"] div[data-baseweb="tag"] svg{ fill:#bfdbfe !important; }
+
+/* Dropdown de opciones */
+section[data-testid="stSidebar"] div[role="listbox"]{
+  background:#0b1220 !important; border:1px solid #334155 !important;
+}
+section[data-testid="stSidebar"] div[role="option"]{
+  color:#e5e7eb !important;
+}
+section[data-testid="stSidebar"] div[role="option"][aria-selected="true"]{
+  background:#1d4ed8 !important; color:#ffffff !important;
+}
+
+/* Focus/hover de inputs */
+section[data-testid="stSidebar"] .stSelectbox > div > div:focus-within,
+section[data-testid="stSidebar"] .stMultiSelect > div > div:focus-within,
+section[data-testid="stSidebar"] .stDateInput > div > div:focus-within{
+  border-color:#60a5fa !important; box-shadow:0 0 0 2px rgba(56,189,248,.25) !important;
+}
+
+/* Scrollbar sidebar */
+section[data-testid="stSidebar"] ::-webkit-scrollbar{ width:10px; }
+section[data-testid="stSidebar"] ::-webkit-scrollbar-track{ background:#0b1220; }
+section[data-testid="stSidebar"] ::-webkit-scrollbar-thumb{ background:#334155; border-radius:10px; border:2px solid #0b1220; }
+section[data-testid="stSidebar"] ::-webkit-scrollbar-thumb:hover{ background:#475569; }
+
+/* Dataframe hover */
+.dataframe tbody tr:hover { background: #f8fafc; }
+
+/* Botones coherentes */
+button[kind="primary"]{ background:#6366f1 !important; border:0 !important; }
+button[kind="primary"]:hover{ background:#4f46e5 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# --------- HEADER (sin etiqueta secundaria) ---------
+st.markdown("""
+<div class="app-header">
+  <div style="font-size:28px">📦</div>
+  <div><h1>Dashboard de Inventario – Warehousing</h1></div>
+</div>
+""", unsafe_allow_html=True)
+
+# --------- Plotly defaults (paleta moderna) ----------
+PALETA = ["#0ea5e9","#6366f1","#22c55e","#f59e0b","#62748E","#a855f7","#14b8a6","#f43f5e"]
+px.defaults.template = "plotly_white"
+px.defaults.color_discrete_sequence = PALETA
+px.defaults.height = 420
+
+# ==========================================
+# 📥 CARGA DE DATOS
+# ==========================================
+RELATIVE_EXCEL = r"C:\Users\dflores\Warehousing Valle Grande SA\Operaciones - 001 CONTROL STOCK\Herramientas de control stock\2025\Dashboard_Lista de tareas 2025.xlsx"
 
 @st.cache_data
-def cargar_datos(ruta):
-    df = pd.read_excel(ruta)
-    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+def leer_excel_desde_bytes(b: bytes) -> pd.DataFrame:
+    return pd.read_excel(BytesIO(b))  # openpyxl por defecto
+
+@st.cache_data
+def leer_excel_desde_ruta(path: str) -> pd.DataFrame:
+    return pd.read_excel(path)
+
+def normalizar_columnas(df: pd.DataFrame) -> pd.DataFrame:
+    cols = (df.columns
+        .str.strip().str.lower().str.replace(" ", "_")
+        .str.replace("á","a").str.replace("é","e").str.replace("í","i").str.replace("ó","o").str.replace("ú","u")
+        .str.replace("ñ","n"))
+    df.columns = cols
+    df = df.rename(columns={
+        "accion":"accion", "accion_ejecutada":"accion", "accion_realizada":"accion",
+        "codigo_inventario":"codigo_inventario", "codigo":"codigo_inventario",
+        "codigo__inventario":"codigo_inventario", "código_inventario":"codigo_inventario"
+    })
     return df
 
-try:
-    df = cargar_datos(RUTA_ARCHIVO)
-except FileNotFoundError:
-    st.error(f"No se encontró el archivo en la ruta: {RUTA_ARCHIVO}")
-    st.stop()
-
-# Validar columnas
-# Normalizar nombres de columnas
-df.columns = (
-    df.columns
-    .str.strip()
-    .str.lower()
-    .str.replace(" ", "_")
-    .str.replace("á", "a")
-    .str.replace("é", "e")
-    .str.replace("í", "i")
-    .str.replace("ó", "o")
-    .str.replace("ú", "u")
-    .str.replace("ñ", "n")
-)
-
-# Reemplazo personalizado de columnas comunes mal escritas
-reemplazo_columnas = {
-    "codigo_inventario": "codigo_inventario",
-    "codigo__inventario": "codigo_inventario",
-    "codigo": "codigo_inventario",
-    "accion": "accion",
-    "acción": "accion",
-    "accion_ejecutada": "accion"
-}
-df.rename(columns=reemplazo_columnas, inplace=True)
-
-# Verificación de columnas necesarias
-columnas_requeridas = [
-    'fecha_de_inicio', 'fecha_de_termino', 'total_horas', 'cliente', 'coordinador',
-    'contenedores_asignados', 'contenedores_contados', 'ubicaciones_asignadas', 'ubicaciones_contadas',
-    'contador', 'tipo_de_inventario', 'prioridad', '%_completado', 'inventario',
-    'estado_de_inventario', 'criterio', 'codigo_inventario', 'accion'
-]
-
-faltantes = [col for col in columnas_requeridas if col not in df.columns]
-if faltantes:
-    st.error(f"❌ Columnas faltantes: {faltantes}")
-    st.stop()
-
-# Procesamiento de fechas y horas
-df['fecha_de_inicio'] = pd.to_datetime(df['fecha_de_inicio'], errors='coerce')
-df['fecha_de_termino'] = pd.to_datetime(df['fecha_de_termino'], errors='coerce')
-
-def convertir_a_horas(tiempo):
-    if pd.isna(tiempo):
-        return 0
-    if isinstance(tiempo, str):
+def a_horas_decimales(x):
+    if pd.isna(x): return 0
+    if isinstance(x, str):
         try:
-            h, m, s = map(int, tiempo.split(":"))
-            return h + m / 60 + s / 3600
-        except:
-            return 0
+            parts = x.split(":"); parts += ["0"]*(3-len(parts))
+            h, m, s = map(int, parts[:3]); return h + m/60 + s/3600
+        except: return 0
     try:
-        return tiempo.hour + tiempo.minute / 60 + tiempo.second / 3600
+        return getattr(x, "hour", 0) + getattr(x, "minute", 0)/60 + getattr(x, "second", 0)/3600
     except:
-        return float(tiempo)
+        try: return float(x)
+        except: return 0
 
-df["horas_decimal"] = df["total_horas"].apply(convertir_a_horas)
+# Carga tolerante
+if os.path.exists(RELATIVE_EXCEL):
+    df = leer_excel_desde_ruta(RELATIVE_EXCEL)
+    st.caption(f"📁 Archivo cargado desde el proyecto: {RELATIVE_EXCEL}")
+else:
+    st.info("No se encontró el Excel relativo. Puedes subir uno para continuar.")
+    up = st.file_uploader("Sube un archivo Excel (.xlsx / .xls)", type=["xlsx","xls"])
+    if up is None:
+        st.stop()
+    df = leer_excel_desde_bytes(up.getvalue())
+    st.caption(f"☁️ Archivo cargado desde uploader: {up.name}")
 
-# 📅 Filtro por rango de fechas
-st.sidebar.subheader("📅 Rango de fechas")
-min_fecha = df["fecha_de_inicio"].min().date()
-max_fecha = df["fecha_de_inicio"].max().date()
-rango = st.sidebar.date_input("Seleccionar período", (min_fecha, max_fecha), min_value=min_fecha, max_value=max_fecha)
+# ============================
+# 🧹 LIMPIEZA / PREPARACIONES
+# ============================
+df = normalizar_columnas(df)
 
+requeridas = [
+    "fecha_de_inicio","fecha_de_termino","total_horas","cliente","coordinador",
+    "contenedores_asignados","contenedores_contados","ubicaciones_asignadas",
+    "ubicaciones_contadas","contador","tipo_de_inventario","prioridad",
+    "estado_de_inventario","codigo_inventario"
+]
+faltantes = [c for c in requeridas if c not in df.columns]
+if faltantes:
+    st.error(f"❌ Columnas faltantes en el archivo: {faltantes}")
+    st.stop()
+
+df["fecha_de_inicio"] = pd.to_datetime(df["fecha_de_inicio"], errors="coerce")
+df["fecha_de_termino"] = pd.to_datetime(df["fecha_de_termino"], errors="coerce")
+df["horas_decimal"] = df["total_horas"].apply(a_horas_decimales)
+
+col_pct = "%_completado" if "%_completado" in df.columns else None
+if col_pct is None:
+    df["%_completado"] = 0.0
+    col_pct = "%_completado"
+
+# ======================
+# 🔎 FILTROS (sidebar)
+# ======================
+st.sidebar.header("📅 Rango de fechas")
+fmin = df["fecha_de_inicio"].min().date()
+fmax = df["fecha_de_inicio"].max().date()
+rango = st.sidebar.date_input("Selecciona el período", (fmin, fmax), min_value=fmin, max_value=fmax)
 if isinstance(rango, tuple) and len(rango) == 2:
-    inicio, fin = pd.to_datetime(rango[0]), pd.to_datetime(rango[1])
-    df = df[(df["fecha_de_inicio"] >= inicio) & (df["fecha_de_inicio"] <= fin)]
+    ini, fin = pd.to_datetime(rango[0]), pd.to_datetime(rango[1])
+    df = df[df["fecha_de_inicio"].between(ini, fin)]
 
-# Filtros adicionales
-clientes = st.sidebar.multiselect("Cliente", df["cliente"].dropna().unique(), default=df["cliente"].dropna().unique())
-coordinadores = st.sidebar.multiselect("Coordinador", df["coordinador"].dropna().unique(), default=df["coordinador"].dropna().unique())
-tipos_inv = st.sidebar.multiselect("Tipo de inventario", df["tipo_de_inventario"].dropna().unique(), default=df["tipo_de_inventario"].dropna().unique())
-estados = st.sidebar.multiselect("Estado", df["estado_de_inventario"].dropna().unique(), default=df["estado_de_inventario"].dropna().unique())
-prioridades = st.sidebar.multiselect("Prioridad", df["prioridad"].dropna().unique(), default=df["prioridad"].dropna().unique())
+st.sidebar.header("🎯 Filtros")
+clientes = st.sidebar.multiselect("Cliente", sorted(df["cliente"].dropna().unique()),
+                                  default=list(sorted(df["cliente"].dropna().unique())))
+coordinadores = st.sidebar.multiselect("Coordinador", sorted(df["coordinador"].dropna().unique()),
+                                       default=list(sorted(df["coordinador"].dropna().unique())))
+tipos = st.sidebar.multiselect("Tipo de inventario", sorted(df["tipo_de_inventario"].dropna().unique()),
+                               default=list(sorted(df["tipo_de_inventario"].dropna().unique())))
+estados = st.sidebar.multiselect("Estado", sorted(df["estado_de_inventario"].dropna().unique()),
+                                 default=list(sorted(df["estado_de_inventario"].dropna().unique())))
+prioridades = st.sidebar.multiselect("Prioridad", sorted(df["prioridad"].dropna().unique()),
+                                     default=list(sorted(df["prioridad"].dropna().unique())))
 
 df = df[
-    (df["cliente"].isin(clientes)) &
-    (df["coordinador"].isin(coordinadores)) &
-    (df["tipo_de_inventario"].isin(tipos_inv)) &
-    (df["estado_de_inventario"].isin(estados)) &
-    (df["prioridad"].isin(prioridades))
+    df["cliente"].isin(clientes) &
+    df["coordinador"].isin(coordinadores) &
+    df["tipo_de_inventario"].isin(tipos) &
+    df["estado_de_inventario"].isin(estados) &
+    df["prioridad"].isin(prioridades)
 ]
 
-# KPIs generales
-st.subheader("📌 Indicadores Generales - Equipo control de stock")
-col1, col2, col3 = st.columns(3)
-col1.metric("⏱ Total horas trabajadas", round(df["horas_decimal"].sum(), 2))
-col2.metric("✅ % promedio completado", f"{df['%_completado'].mean()*100:.1f}%")
-col3.metric("📦 Inventarios únicos", df["codigo_inventario"].nunique())
+# ======================
+# 🔢 KPIs
+# ======================
+total_horas = df["horas_decimal"].sum()
+prom_completado = df[col_pct].mean() if len(df) else 0
+inventarios_unicos = df["codigo_inventario"].nunique()
 
-# 📊 Indicadores por Contador
-# Asegurar nombre correcto de la columna de completado
-if "%_completado" in df.columns:
-    col_completado = "%_completado"
-elif "porcentaje_completado" in df.columns:
-    col_completado = "porcentaje_completado"
-else:
-    st.error("❌ No se encontró la columna de porcentaje completado en el archivo.")
-    st.stop()
+total_contenedores_asig = df["contenedores_asignados"].fillna(0).sum()
+total_contenedores_cont = df["contenedores_contados"].fillna(0).sum()
+total_ubic_asig = df["ubicaciones_asignadas"].fillna(0).sum()
+total_ubic_cont = df["ubicaciones_contadas"].fillna(0).sum()
 
+avance_contenedores = (total_contenedores_cont / total_contenedores_asig) if total_contenedores_asig else 0
+avance_ubicaciones = (total_ubic_cont / total_ubic_asig) if total_ubic_asig else 0
+backlog_contenedores = max(total_contenedores_asig - total_contenedores_cont, 0)
+backlog_ubicaciones = max(total_ubic_asig - total_ubic_cont, 0)
+
+# ====== reconocimiento ampliado de "completado" ======
+df["estado_de_inventario_norm"] = df["estado_de_inventario"].astype(str).str.lower().str.strip()
+estados_completos = {
+    "completado","completada","completo",
+    "finalizado","finalizada","terminado","terminada",
+    "cerrado","cerrada","ok","hecho","listo"
+}
+def es_pct_completo(v):
+    try:
+        val = float(v)
+        if val <= 1:   # 0.0-1.0
+            return val >= 0.99
+        else:          # 0-100
+            return val >= 99
+    except:
+        return False
+
+mask_estado = df["estado_de_inventario_norm"].isin(estados_completos) \
+              | df["estado_de_inventario_norm"].str.contains("100", na=False)
+mask_pct = df[col_pct].apply(es_pct_completo)
+
+cumplidos = df.loc[mask_estado | mask_pct, "codigo_inventario"].nunique()
+total_invs = df["codigo_inventario"].nunique()
+tasa_cumplimiento = (cumplidos / total_invs) if total_invs else 0
+
+duracion_prom_por_inv = df.groupby("codigo_inventario")["horas_decimal"].sum().mean() if total_invs else 0
+prod_global_cont = (total_contenedores_cont / total_horas) if total_horas else 0
+prod_global_ubic = (total_ubic_cont / total_horas) if total_horas else 0
+
+tooltip_backlog_cont = ("Backlog contenedores: contenedores asignados que aún no han sido contados. "
+                        "Fórmula = Asignados - Contados.")
+tooltip_backlog_ubic = ("Backlog ubicaciones: ubicaciones asignadas que aún no han sido contadas. "
+                        "Fórmula = Asignadas - Contadas.")
+
+k1,k2,k3,k4 = st.columns(4)
+with k1:
+    st.markdown(f'<div class="kpi" title="Suma de horas en el período/filtrado.">'
+                f'<div class="label">Total horas trabajadas</div>'
+                f'<div class="value">{num_dot(total_horas, 2)} h</div></div>', unsafe_allow_html=True)
+with k2:
+    st.markdown(f'<div class="kpi" title="Promedio de avance de los registros filtrados.">'
+                f'<div class="label">% promedio completado</div>'
+                f'<div class="value">{pct(prom_completado, 1)}</div></div>', unsafe_allow_html=True)
+with k3:
+    st.markdown(f'<div class="kpi" title="Códigos de inventario únicos en la vista.">'
+                f'<div class="label">Inventarios únicos</div>'
+                f'<div class="value">{num_dot(inventarios_unicos)}</div></div>', unsafe_allow_html=True)
+with k4:
+    st.markdown(f'<div class="kpi" title="Inventarios con estado final o ≥99% de avance.">'
+                f'<div class="label">Tasa de cumplimiento</div>'
+                f'<div class="value">{pct(tasa_cumplimiento, 1)}</div></div>', unsafe_allow_html=True)
+
+k5,k6,k7,k8 = st.columns(4)
+with k5:
+    st.markdown(f'<div class="kpi" title="Contenedores contados / asignados.">'
+                f'<div class="label">Avance contenedores</div>'
+                f'<div class="value">{pct(avance_contenedores, 1)}</div></div>', unsafe_allow_html=True)
+with k6:
+    st.markdown(f'<div class="kpi" title="Ubicaciones contadas / asignadas.">'
+                f'<div class="label">Avance ubicaciones</div>'
+                f'<div class="value">{pct(avance_ubicaciones, 1)}</div></div>', unsafe_allow_html=True)
+with k7:
+    st.markdown(f'<div class="kpi" title="{tooltip_backlog_cont}">'
+                f'<div class="label">Backlog contenedores</div>'
+                f'<div class="value">{num_dot(backlog_contenedores)}</div></div>', unsafe_allow_html=True)
+with k8:
+    st.markdown(f'<div class="kpi" title="{tooltip_backlog_ubic}">'
+                f'<div class="label">Backlog ubicaciones</div>'
+                f'<div class="value">{num_dot(backlog_ubicaciones)}</div></div>', unsafe_allow_html=True)
+
+k9,k10 = st.columns(2)
+with k9:
+    st.markdown(f'<div class="kpi" title="Contenedores contados por hora trabajada (global).">'
+                f'<div class="label">Prod. global (contenedores/h)</div>'
+                f'<div class="value">{num_dot(prod_global_cont, 2)}</div></div>', unsafe_allow_html=True)
+with k10:
+    st.markdown(f'<div class="kpi" title="Ubicaciones contadas por hora trabajada (global).">'
+                f'<div class="label">Prod. global (ubicaciones/h)</div>'
+                f'<div class="value">{num_dot(prod_global_ubic, 2)}</div></div>', unsafe_allow_html=True)
+
+# =====================================
+# 📊 INDICADORES POR CONTADOR
+# =====================================
 resumen = (
     df.groupby("contador", dropna=False)
       .agg(
-          horas_totales=("horas_decimal", "sum"),      # para productividad
-          horas_promedio=("horas_decimal", "mean"),    # lo que quieres mostrar
-          contenedores_contados=("contenedores_contados", "sum"),
-          ubicaciones_contadas=("ubicaciones_contadas", "sum"),
-          porcentaje_completado=(col_completado, "mean"),
-          clientes=("cliente", "nunique")
-      )
-      .reset_index()
+          horas_totales=("horas_decimal","sum"),
+          horas_promedio=("horas_decimal","mean"),
+          contenedores_contados=("contenedores_contados","sum"),
+          ubicaciones_contadas=("ubicaciones_contadas","sum"),
+          porcentaje_completado=(col_pct,"mean"),
+          clientes=("cliente","nunique")
+      ).reset_index()
+)
+resumen["productividad_contenedores"] = resumen["contenedores_contados"] / resumen["horas_totales"].replace(0, pd.NA)
+resumen["productividad_ubicaciones"] = resumen["ubicaciones_contadas"] / resumen["horas_totales"].replace(0, pd.NA)
+
+resumen_fmt = resumen.copy()
+resumen_fmt["porcentaje_completado"] = (resumen_fmt["porcentaje_completado"]*100).round(2)
+resumen_fmt["horas_promedio"] = resumen_fmt["horas_promedio"].round(2)
+resumen_fmt["productividad_contenedores"] = resumen_fmt["productividad_contenedores"].round(2)
+resumen_fmt["productividad_ubicaciones"] = resumen_fmt["productividad_ubicaciones"].round(2)
+resumen_fmt["contenedores_contados"] = resumen_fmt["contenedores_contados"].astype(int)
+resumen_fmt["ubicaciones_contadas"] = resumen_fmt["ubicaciones_contadas"].astype(int)
+
+st.markdown("### 📊 Indicadores por Contador")
+st.dataframe(
+    resumen_fmt.rename(columns={"horas_promedio":"prom_horas"})[
+        ["contador","prom_horas","contenedores_contados","ubicaciones_contadas",
+         "productividad_contenedores","productividad_ubicaciones","porcentaje_completado","clientes"]
+    ].style.format({
+        "prom_horas": lambda v: num_dot(v, 2),
+        "productividad_contenedores": lambda v: num_dot(v, 2),
+        "productividad_ubicaciones": lambda v: num_dot(v, 2),
+        "porcentaje_completado": lambda v: pct(v, 2),
+        "contenedores_contados": lambda v: num_dot(v, 0),
+        "ubicaciones_contadas": lambda v: num_dot(v, 0),
+        "clientes": lambda v: num_dot(v, 0),
+    }),
+    use_container_width=True
 )
 
-# Productividad POR CONTADOR (usa horas_totales del propio contador)
-resumen["productividad_contenedores"] = (
-    resumen["contenedores_contados"] / resumen["horas_totales"].replace(0, pd.NA)
-)
-resumen["productividad_ubicaciones"] = (
-    resumen["ubicaciones_contadas"] / resumen["horas_totales"].replace(0, pd.NA)
-)
+# ===========================
+# 🧭 TABS: Visualizaciones / Resúmenes
+# ===========================
+tab1, tab2 = st.tabs(["📈 Visualizaciones", "📋 Resúmenes"])
 
-# Mostrar % en formato legible
-resumen["porcentaje_completado"] = (resumen["porcentaje_completado"] * 100).round(2)
-
-# Formateo final
-resumen["horas_promedio"] = resumen["horas_promedio"].round(2)
-resumen["productividad_contenedores"] = resumen["productividad_contenedores"].round(2)
-resumen["productividad_ubicaciones"] = resumen["productividad_ubicaciones"].round(2)
-resumen["contenedores_contados"] = resumen["contenedores_contados"].astype(int)
-resumen["ubicaciones_contadas"] = resumen["ubicaciones_contadas"].astype(int)
-
-# Si quieres que la columna visible se llame 'total_horas' pero sea el PROMEDIO:
-resumen = resumen.rename(columns={"horas_promedio": "total_horas"})
-
-# (Opcional) Si no quieres mostrar horas_totales en la tabla final:
-# resumen = resumen.drop(columns=["horas_totales"])
-
-st.subheader("📊 Indicadores por Contador")
-st.dataframe(resumen, use_container_width=True)
-
-
-# 📈 Visualizaciones
-with st.expander("📈 Visualizaciones Detalladas"):
-    fig1 = px.bar(resumen, x="total_horas", y="contador", orientation="h", text="total_horas", color="contador",
-                  title="⏱ Horas trabajadas por contador")
-    fig1.update_traces(textposition='inside')
+with tab1:
+    st.markdown('<div class="block">', unsafe_allow_html=True)
+    orden_hp = resumen_fmt.sort_values("horas_promedio")
+    fig1 = px.bar(
+        orden_hp, x="horas_promedio", y="contador", orientation="h", color="contador",
+        text=orden_hp["horas_promedio"].apply(lambda v: f"{v:.2f} h"),
+        title="⏱ Promedio de horas por contador"
+    )
+    fig1.update_traces(textposition="inside",
+                       hovertemplate="<b>%{y}</b><br>Horas prom.: %{x:.2f} h")
+    fig1.update_layout(xaxis_title="Horas promedio", yaxis_title="",
+                       margin=dict(l=10,r=10,t=60,b=10), showlegend=False)
     st.plotly_chart(fig1, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    fig2 = px.bar(resumen, x="contenedores_contados", y="contador", orientation="h", text="contenedores_contados", color="contador",
-                  title="📦 Contenedores contados por contador")
-    fig2.update_traces(textposition='inside')
-    st.plotly_chart(fig2, use_container_width=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown('<div class="block">', unsafe_allow_html=True)
+        orden = resumen_fmt.sort_values("contenedores_contados")
+        fig2 = px.bar(
+            orden, x="contenedores_contados", y="contador", orientation="h", color="contador",
+            text=orden["contenedores_contados"].apply(lambda v: num_dot(v, 0)),
+            title="📦 Contenedores contados (totales)"
+        )
+        fig2.update_traces(textposition="inside",
+                           hovertemplate="<b>%{y}</b><br>Contenedores: %{x}")
+        fig2.update_layout(xaxis_title="Unidades", yaxis_title="",
+                           margin=dict(l=10,r=10,t=60,b=10), showlegend=False)
+        st.plotly_chart(fig2, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    fig3 = px.bar(resumen, x="ubicaciones_contadas", y="contador", orientation="h", text="ubicaciones_contadas", color="contador",
-                  title="📍 Ubicaciones contadas por contador")
-    fig3.update_traces(textposition='inside')
-    st.plotly_chart(fig3, use_container_width=True)
+    with c2:
+        st.markdown('<div class="block">', unsafe_allow_html=True)
+        orden = resumen_fmt.sort_values("ubicaciones_contadas")
+        fig3 = px.bar(
+            orden, x="ubicaciones_contadas", y="contador", orientation="h", color="contador",
+            text=orden["ubicaciones_contadas"].apply(lambda v: num_dot(v, 0)),
+            title="📍 Ubicaciones contadas (totales)"
+        )
+        fig3.update_traces(textposition="inside",
+                           hovertemplate="<b>%{y}</b><br>Ubicaciones: %{x}")
+        fig3.update_layout(xaxis_title="Unidades", yaxis_title="",
+                           margin=dict(l=10,r=10,t=60,b=10), showlegend=False)
+        st.plotly_chart(fig3, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# 📊 Distribución porcentual por Tipo de Inventario
-tipo_inv_pie = df["tipo_de_inventario"].value_counts().reset_index()
-tipo_inv_pie.columns = ["tipo_de_inventario", "cantidad"]
+    st.markdown('<div class="block">', unsafe_allow_html=True)
+    tipo_inv_pie = df["tipo_de_inventario"].value_counts().reset_index()
+    tipo_inv_pie.columns = ["tipo_de_inventario", "cantidad"]
+    fig4 = px.pie(
+        tipo_inv_pie, names="tipo_de_inventario", values="cantidad",
+        title="📊 Distribución porcentual por Tipo de inventario", hole=.45
+    )
+    fig4.update_traces(textinfo="percent+label", hovertemplate="<b>%{label}</b><br>%{percent}")
+    st.plotly_chart(fig4, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-fig4 = px.pie(
-    tipo_inv_pie,
-    names="tipo_de_inventario",
-    values="cantidad",
-    title="📊 Distribución porcentual por Tipo de Inventario",
-    hole=0.4  # para un gráfico tipo dona, opcional
+with tab2:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Tipos de inventario", int(df["tipo_de_inventario"].nunique()))
+    c2.metric("Estados de inventario", int(df["estado_de_inventario"].nunique()))
+    c3.metric("Clientes únicos", int(df["cliente"].nunique()))
+    c4.metric("Inventarios únicos", int(df["codigo_inventario"].nunique()))
+
+    st.markdown("### 📋 Resúmenes")
+
+    resumen_tipo_estado = (
+        df.groupby(["tipo_de_inventario", "estado_de_inventario"])["codigo_inventario"]
+          .nunique().reset_index().sort_values("codigo_inventario", ascending=False)
+    )
+    resumen_tipo_estado.columns = ["Tipo de Inventario", "Estado de Inventario", "Inventarios Únicos"]
+    st.write("**Inventarios únicos por Tipo y Estado**")
+    st.dataframe(
+        resumen_tipo_estado.style.format({"Inventarios Únicos": lambda v: num_dot(v, 0)}),
+        use_container_width=True
+    )
+
+    resumen_tipo = (
+        df.groupby("tipo_de_inventario")["codigo_inventario"]
+          .nunique().reset_index().sort_values("codigo_inventario", ascending=False)
+    )
+    resumen_tipo.columns = ["Tipo de Inventario", "Inventarios Únicos"]
+    st.write("**Inventarios únicos por Tipo**")
+    st.dataframe(
+        resumen_tipo.style.format({"Inventarios Únicos": lambda v: num_dot(v, 0)}),
+        use_container_width=True
+    )
+
+    resumen_cliente = (
+        df.groupby("cliente")["codigo_inventario"]
+          .nunique().reset_index().sort_values("codigo_inventario", ascending=False)
+    )
+    resumen_cliente.columns = ["Cliente", "Inventarios Únicos"]
+    st.write("**Inventarios únicos por Cliente**")
+    st.dataframe(
+        resumen_cliente.style.format({"Inventarios Únicos": lambda v: num_dot(v, 0)}),
+        use_container_width=True
+    )
+
+    orden_tipos = resumen_tipo.sort_values("Inventarios Únicos")
+    fig_tipos = px.bar(
+        orden_tipos, x="Inventarios Únicos", y="Tipo de Inventario", orientation="h",
+        text=orden_tipos["Inventarios Únicos"].apply(lambda v: num_dot(v,0)),
+        color="Tipo de Inventario", title="📊 Inventarios únicos por Tipo"
+    )
+    fig_tipos.update_traces(textposition="inside")
+    fig_tipos.update_layout(xaxis_title="Inventarios únicos", yaxis_title="",
+                            uniformtext_minsize=8, uniformtext_mode="hide", showlegend=False)
+    st.plotly_chart(fig_tipos, use_container_width=True)
+
+    fig_estado = px.bar(
+        resumen_tipo_estado, x="Tipo de Inventario", y="Inventarios Únicos",
+        color="Estado de Inventario", barmode="group",
+        text=resumen_tipo_estado["Inventarios Únicos"].apply(lambda v: num_dot(v,0)),
+        title="📊 Inventarios únicos por Tipo y Estado"
+    )
+    fig_estado.update_traces(textposition="inside")
+    fig_estado.update_layout(xaxis_title="Tipo de inventario", yaxis_title="Inventarios únicos",
+                             legend_title="Estado", uniformtext_minsize=8, uniformtext_mode="hide")
+    st.plotly_chart(fig_estado, use_container_width=True)
+
+    top_n = 15
+    resumen_cliente_top = resumen_cliente.head(top_n).sort_values("Inventarios Únicos")
+    fig_clientes = px.bar(
+        resumen_cliente_top, x="Inventarios Únicos", y="Cliente", orientation="h",
+        text=resumen_cliente_top["Inventarios Únicos"].apply(lambda v: num_dot(v,0)),
+        color="Cliente", title=f"👥 Top {top_n} clientes por inventarios únicos"
+    )
+    fig_clientes.update_traces(textposition="inside")
+    fig_clientes.update_layout(xaxis_title="Inventarios únicos", yaxis_title="",
+                               uniformtext_minsize=8, uniformtext_mode="hide", showlegend=False)
+    st.plotly_chart(fig_clientes, use_container_width=True)
+
+# ======================
+# 📤 Descarga de datos filtrados (engine=openpyxl)
+# ======================
+def to_excel_bytes(df_in: pd.DataFrame) -> bytes:
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        df_in.to_excel(writer, index=False, sheet_name="filtrado")
+    return out.getvalue()
+
+st.download_button(
+    "⬇️ Descargar datos filtrados (Excel)",
+    data=to_excel_bytes(df),
+    file_name="inventario_filtrado.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
 )
 
-fig4.update_traces(textinfo='percent+label')  # Mostrar % y etiqueta
-st.plotly_chart(fig4, use_container_width=True)
+# ===== OVERRIDE FINAL PARA ASEGURAR AZUL EN CHIPS DEL SIDEBAR =====
+st.markdown("""
+<style>
+section[data-testid="stSidebar"] .stMultiSelect div[data-baseweb="tag"],
+section[data-testid="stSidebar"] div[data-baseweb="tag"]{
+  background:#2563eb !important;
+  border:1px solid #3b82f6 !important;
+  color:#ffffff !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="tag"] span{ color:#ffffff !important; }
+section[data-testid="stSidebar"] div[data-baseweb="tag"] svg{ fill:#bfdbfe !important; }
+</style>
+""", unsafe_allow_html=True)
 
-# 📄 Resumen por tipo de inventario
-resumen_tipo_de_inventario = df.groupby("tipo_de_inventario")["contenedores_contados"].sum().reset_index().sort_values(by="contenedores_contados", ascending=False)
-st.subheader("📋 Resumen de Contenedores contados por tipo de inventario")
-st.dataframe(resumen_tipo_de_inventario, use_container_width=True)
+st.markdown("""
+<style>
+/* ====== ULTRA-OVERRIDE CHIPS SIDEBAR (azul) ======
+   Debe ir al final del archivo para ganar la cascada. */
 
-# 📄 Resumen por Cliente
-resumen_cliente = df.groupby("cliente")["contenedores_contados"].sum().reset_index().sort_values(by="contenedores_contados", ascending=False)
-st.subheader("📋 Resumen de Contenedores contados por Cliente")
-st.dataframe(resumen_cliente, use_container_width=True)
+/* Caja del multiselect */
+section[data-testid="stSidebar"] .stMultiSelect > div > div {
+  background-color: #1e293b !important;
+  border: 1px solid #3b4252 !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
 
-# 📄 Resumen por tipo y estado de inventario
-resumen_tipo_estado = (
-    df.groupby(["tipo_de_inventario", "estado_de_inventario"])["codigo_inventario"]
-    .nunique()
-    .reset_index()
-    .sort_values(by="codigo_inventario", ascending=False)
-)
+/* Cubre cualquier elemento (div/span) marcado como tag */
+section[data-testid="stSidebar"] [data-baseweb="tag"] {
+  background-color: #2563eb !important;   /* AZUL */
+  background: #2563eb !important;
+  border: 1px solid #3b82f6 !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  padding: .22rem .5rem !important;
+  font-weight: 600 !important;
+  letter-spacing: .2px !important;
+}
 
-resumen_tipo_estado.columns = ["Tipo de Inventario", "Estado de Inventario", "Inventarios Únicos"]
+/* Por si el Tag usa <span> en vez de <div> */
+section[data-testid="stSidebar"] span[data-baseweb="tag"],
+section[data-testid="stSidebar"] div[data-baseweb="tag"] {
+  background-color: #2563eb !important;
+  background: #2563eb !important;
+  border: 1px solid #3b82f6 !important;
+  color: #ffffff !important;
+}
 
-st.subheader("📋 Resumen por Tipo y Estado de Inventario")
-st.dataframe(resumen_tipo_estado, use_container_width=True)
+/* Texto e ícono dentro del chip */
+section[data-testid="stSidebar"] [data-baseweb="tag"] span { color: #ffffff !important; }
+section[data-testid="stSidebar"] [data-baseweb="tag"] svg  { fill:  #bfdbfe !important; }
 
-import plotly.express as px
+/* Estado hover/active */
+section[data-testid="stSidebar"] [data-baseweb="tag"]:hover {
+  background-color: #1d4ed8 !important;
+  background: #1d4ed8 !important;
+  border-color: #60a5fa !important;
+}
 
-fig_estado = px.bar(
-    resumen_tipo_estado,
-    x="Tipo de Inventario",
-    y="Inventarios Únicos",
-    color="Estado de Inventario",  # Colorea automáticamente por estado
-    barmode="group",
-    title="📊 Inventarios Únicos por Tipo y Estado",
-    text="Inventarios Únicos"  # Mostrar etiquetas
-)
+/* Dropdown oscuro (coherente) */
+section[data-testid="stSidebar"] div[role="listbox"] {
+  background:#0b1220 !important; border:1px solid #334155 !important;
+}
+section[data-testid="stSidebar"] div[role="option"] { color:#e5e7eb !important; }
+section[data-testid="stSidebar"] div[role="option"][aria-selected="true"] {
+  background:#1d4ed8 !important; color:#ffffff !important;
+}
+</style>
+            
+""", unsafe_allow_html=True)
 
-# Configurar etiquetas dentro de las barras
-fig_estado.update_traces(
-    texttemplate='%{text:.0f}',  # Mostrar como número entero
-    textposition='inside'
-)
-
-# Mejorar legibilidad del gráfico
-fig_estado.update_layout(
-    xaxis_title="Tipo de Inventario",
-    yaxis_title="Inventarios Únicos",
-    legend_title="Estado de Inventario",
-    uniformtext_minsize=8,
-    uniformtext_mode='hide'
-)
-
-st.plotly_chart(fig_estado, use_container_width=True)
-
+# ========== FIN ==========
 
 
