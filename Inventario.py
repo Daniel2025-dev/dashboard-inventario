@@ -25,11 +25,12 @@ st.set_page_config(page_title="Dashboard de Inventario", layout="wide", page_ico
 
 # --------- UTILIDADES DE FORMATO (puntos y %) ----------
 def num_dot(x, decimals=0):
+    """Formatea números con punto como separador de miles y coma como decimal."""
     try:
         if pd.isna(x):
             x = 0
         fmt = f"{{:,.{decimals}f}}".format(float(x))
-        # Reemplaza comas por puntos (miles) y deja punto decimal
+        # Reemplaza comas por puntos (miles) y deja punto decimal con coma
         fmt = fmt.replace(",", "X").replace(".", ",").replace("X", ".")
         if decimals == 0:
             fmt = fmt.replace(",00", "")
@@ -38,8 +39,9 @@ def num_dot(x, decimals=0):
         return str(x)
 
 def pct(x, decimals=1):
+    """Formatea porcentajes aceptando 0–1 o 0–100, siempre con %."""
     try:
-        v = float(x) * 100 if abs(float(x)) <= 1 else float(x)  # acepta 0.87 o 87
+        v = float(x) * 100 if abs(float(x)) <= 1 else float(x)
         fmt = f"{v:.{decimals}f}"
         return f"{fmt}%"
     except Exception:
@@ -88,7 +90,6 @@ section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, sectio
 }
 
 /* ====== CAMPOS de filtros (Selectbox / Multiselect) ====== */
-/* Recuadro del input */
 section[data-testid="stSidebar"] .stSelectbox > div > div,
 section[data-testid="stSidebar"] .stMultiSelect > div > div,
 section[data-testid="stSidebar"] .stDateInput > div > div{
@@ -172,7 +173,7 @@ px.defaults.height = 420
 # ==========================================
 # 📥 CARGA DE DATOS
 # ==========================================
-RELATIVE_EXCEL = "Dashboard_Lista de tareas 2025.xlsx"
+RELATIVE_EXCEL = r"C:\Users\dflores\Warehousing Valle Grande SA\Operaciones - 001 CONTROL STOCK\Herramientas de control stock\2025\Dashboard_Lista de tareas 2025.xlsx"
 
 @st.cache_data
 def leer_excel_desde_bytes(b: bytes) -> pd.DataFrame:
@@ -183,6 +184,7 @@ def leer_excel_desde_ruta(path: str) -> pd.DataFrame:
     return pd.read_excel(path)
 
 def normalizar_columnas(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza nombres (snake_case sin tildes/ñ) y mapea variantes comunes."""
     cols = (df.columns
         .str.strip().str.lower().str.replace(" ", "_")
         .str.replace("á","a").str.replace("é","e").str.replace("í","i").str.replace("ó","o").str.replace("ú","u")
@@ -196,6 +198,7 @@ def normalizar_columnas(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def a_horas_decimales(x):
+    """Convierte HH:MM(:SS)/time/float a horas decimales. Valores inválidos → 0."""
     if pd.isna(x): return 0
     if isinstance(x, str):
         try:
@@ -236,10 +239,12 @@ if faltantes:
     st.error(f"❌ Columnas faltantes en el archivo: {faltantes}")
     st.stop()
 
-df["fecha_de_inicio"] = pd.to_datetime(df["fecha_de_inicio"], errors="coerce")
+# Fechas (robustas incluso con NaT)
+df["fecha_de_inicio"]  = pd.to_datetime(df["fecha_de_inicio"], errors="coerce")
 df["fecha_de_termino"] = pd.to_datetime(df["fecha_de_termino"], errors="coerce")
-df["horas_decimal"] = df["total_horas"].apply(a_horas_decimales)
+df["horas_decimal"]    = df["total_horas"].apply(a_horas_decimales)
 
+# % completado si no existe
 col_pct = "%_completado" if "%_completado" in df.columns else None
 if col_pct is None:
     df["%_completado"] = 0.0
@@ -249,12 +254,27 @@ if col_pct is None:
 # 🔎 FILTROS (sidebar)
 # ======================
 st.sidebar.header("📅 Rango de fechas")
-fmin = df["fecha_de_inicio"].min().date()
-fmax = df["fecha_de_inicio"].max().date()
+
+# -- FIX: soportar columnas vacías/NaT
+if df["fecha_de_inicio"].notna().any():
+    fmin = df["fecha_de_inicio"].dropna().min().date()
+    fmax = df["fecha_de_inicio"].dropna().max().date()
+else:
+    hoy = pd.Timestamp.today().date()
+    fmin = hoy
+    fmax = hoy
+
 rango = st.sidebar.date_input("Selecciona el período", (fmin, fmax), min_value=fmin, max_value=fmax)
-if isinstance(rango, tuple) and len(rango) == 2:
+
+# -- FIX: validar tupla y orden
+if isinstance(rango, (list, tuple)) and len(rango) == 2:
     ini, fin = pd.to_datetime(rango[0]), pd.to_datetime(rango[1])
-    df = df[df["fecha_de_inicio"].between(ini, fin)]
+    if pd.isna(ini) or pd.isna(fin):
+        st.warning("⚠️ Rango de fechas inválido; se muestran todos los registros.")
+    else:
+        if ini > fin:  # si el usuario invierte el rango
+            ini, fin = fin, ini
+        df = df[df["fecha_de_inicio"].between(ini, fin)]
 
 st.sidebar.header("🎯 Filtros")
 clientes = st.sidebar.multiselect("Cliente", sorted(df["cliente"].dropna().unique()),
@@ -275,6 +295,8 @@ df = df[
     df["estado_de_inventario"].isin(estados) &
     df["prioridad"].isin(prioridades)
 ]
+
+no_datos = df.empty
 
 # ======================
 # 🔢 KPIs
@@ -376,21 +398,28 @@ with k10:
 # =====================================
 # 📊 INDICADORES POR CONTADOR
 # =====================================
-resumen = (
-    df.groupby("contador", dropna=False)
-      .agg(
-          horas_totales=("horas_decimal","sum"),
-          horas_promedio=("horas_decimal","mean"),
-          contenedores_contados=("contenedores_contados","sum"),
-          ubicaciones_contadas=("ubicaciones_contadas","sum"),
-          porcentaje_completado=(col_pct,"mean"),
-          clientes=("cliente","nunique")
-      ).reset_index()
-)
-
-# Productividades → usa np.nan para evitar dtype object
-resumen["productividad_contenedores"] = resumen["contenedores_contados"] / resumen["horas_totales"].replace(0, np.nan)
-resumen["productividad_ubicaciones"] = resumen["ubicaciones_contadas"] / resumen["horas_totales"].replace(0, np.nan)
+if no_datos:
+    # -- FIX: dataframe vacío seguro
+    resumen = pd.DataFrame(columns=[
+        "contador","horas_totales","horas_promedio","contenedores_contados",
+        "ubicaciones_contadas","porcentaje_completado","clientes",
+        "productividad_contenedores","productividad_ubicaciones"
+    ])
+else:
+    resumen = (
+        df.groupby("contador", dropna=False)
+          .agg(
+              horas_totales=("horas_decimal","sum"),
+              horas_promedio=("horas_decimal","mean"),
+              contenedores_contados=("contenedores_contados","sum"),
+              ubicaciones_contadas=("ubicaciones_contadas","sum"),
+              porcentaje_completado=(col_pct,"mean"),
+              clientes=("cliente","nunique")
+          ).reset_index()
+    )
+    # Productividades → usa np.nan para evitar dtype object
+    resumen["productividad_contenedores"] = resumen["contenedores_contados"] / resumen["horas_totales"].replace(0, np.nan)
+    resumen["productividad_ubicaciones"] = resumen["ubicaciones_contadas"] / resumen["horas_totales"].replace(0, np.nan)
 
 # ---------- COERCE A NUMÉRICO (evita TypeError en round) ----------
 cols_num = [
@@ -398,23 +427,34 @@ cols_num = [
     "porcentaje_completado","productividad_contenedores","productividad_ubicaciones"
 ]
 for c in cols_num:
-    resumen[c] = pd.to_numeric(resumen[c], errors="coerce")
+    if c in resumen.columns:
+        resumen[c] = pd.to_numeric(resumen[c], errors="coerce")
 
-# Formateo
+# Formateo seguro
 resumen_fmt = resumen.copy()
-resumen_fmt["porcentaje_completado"] = (resumen_fmt["porcentaje_completado"]*100).round(2)
-resumen_fmt["horas_promedio"] = resumen_fmt["horas_promedio"].round(2)
-resumen_fmt["productividad_contenedores"] = resumen_fmt["productividad_contenedores"].round(2)
-resumen_fmt["productividad_ubicaciones"] = resumen_fmt["productividad_ubicaciones"].round(2)
-resumen_fmt["contenedores_contados"] = resumen_fmt["contenedores_contados"].fillna(0).astype(int)
-resumen_fmt["ubicaciones_contadas"] = resumen_fmt["ubicaciones_contadas"].fillna(0).astype(int)
+if not resumen_fmt.empty:
+    resumen_fmt["porcentaje_completado"]   = (resumen_fmt["porcentaje_completado"]*100).round(2)
+    resumen_fmt["horas_promedio"]          = resumen_fmt["horas_promedio"].round(2)
+    resumen_fmt["productividad_contenedores"] = resumen_fmt["productividad_contenedores"].round(2)
+    resumen_fmt["productividad_ubicaciones"]  = resumen_fmt["productividad_ubicaciones"].round(2)
+    resumen_fmt["contenedores_contados"]   = resumen_fmt["contenedores_contados"].fillna(0).astype(int)
+    resumen_fmt["ubicaciones_contadas"]    = resumen_fmt["ubicaciones_contadas"].fillna(0).astype(int)
+else:
+    # Relleno de columnas numéricas para consistencia
+    for c in ["porcentaje_completado","horas_promedio","productividad_contenedores","productividad_ubicaciones",
+              "contenedores_contados","ubicaciones_contadas"]:
+        if c not in resumen_fmt.columns:
+            resumen_fmt[c] = pd.Series(dtype="float")
+
+# -- FIX CRÍTICO: crear alias estable 'prom_horas' ANTES de usarlo en gráficos/ordenamientos
+resumen_fmt["prom_horas"] = resumen_fmt.get("horas_promedio", pd.Series(dtype="float"))
 
 st.markdown("### 📊 Indicadores por Contador")
 st.dataframe(
-    resumen_fmt.rename(columns={"horas_promedio":"prom_horas"})[
-        ["contador","prom_horas","contenedores_contados","ubicaciones_contadas",
-         "productividad_contenedores","productividad_ubicaciones","porcentaje_completado","clientes"]
-    ].style.format({
+    resumen_fmt[[
+        "contador","prom_horas","contenedores_contados","ubicaciones_contadas",
+        "productividad_contenedores","productividad_ubicaciones","porcentaje_completado","clientes"
+    ]].style.format({
         "prom_horas": lambda v: num_dot(v, 2),
         "productividad_contenedores": lambda v: num_dot(v, 2),
         "productividad_ubicaciones": lambda v: num_dot(v, 2),
@@ -433,10 +473,14 @@ tab1, tab2 = st.tabs(["📈 Visualizaciones", "📋 Resúmenes"])
 
 with tab1:
     st.markdown('<div class="block">', unsafe_allow_html=True)
-    orden_hp = resumen_fmt.sort_values("prom_horas")
+    # -- FIX: ordenar solo si existe la columna y hay datos
+    if "prom_horas" in resumen_fmt.columns and not resumen_fmt["prom_horas"].dropna().empty:
+        orden_hp = resumen_fmt.sort_values("prom_horas")
+    else:
+        orden_hp = resumen_fmt.copy()
     fig1 = px.bar(
         orden_hp, x="prom_horas", y="contador", orientation="h", color="contador",
-        text=orden_hp["prom_horas"].apply(lambda v: f"{(0 if pd.isna(v) else v):.2f} h"),
+        text=orden_hp.get("prom_horas", pd.Series(dtype="float")).fillna(0).apply(lambda v: f"{v:.2f} h"),
         title="⏱ Promedio de horas por contador"
     )
     fig1.update_traces(textposition="inside",
@@ -449,10 +493,13 @@ with tab1:
     c1, c2 = st.columns(2)
     with c1:
         st.markdown('<div class="block">', unsafe_allow_html=True)
-        orden = resumen_fmt.sort_values("contenedores_contados")
+        if "contenedores_contados" in resumen_fmt.columns and not resumen_fmt.empty:
+            orden = resumen_fmt.sort_values("contenedores_contados")
+        else:
+            orden = resumen_fmt.copy()
         fig2 = px.bar(
             orden, x="contenedores_contados", y="contador", orientation="h", color="contador",
-            text=orden["contenedores_contados"].apply(lambda v: num_dot(v, 0)),
+            text=orden.get("contenedores_contados", pd.Series(dtype="float")).fillna(0).apply(lambda v: num_dot(v, 0)),
             title="📦 Contenedores contados (totales)"
         )
         fig2.update_traces(textposition="inside",
@@ -464,10 +511,13 @@ with tab1:
 
     with c2:
         st.markdown('<div class="block">', unsafe_allow_html=True)
-        orden = resumen_fmt.sort_values("ubicaciones_contadas")
+        if "ubicaciones_contadas" in resumen_fmt.columns and not resumen_fmt.empty:
+            orden = resumen_fmt.sort_values("ubicaciones_contadas")
+        else:
+            orden = resumen_fmt.copy()
         fig3 = px.bar(
             orden, x="ubicaciones_contadas", y="contador", orientation="h", color="contador",
-            text=orden["ubicaciones_contadas"].apply(lambda v: num_dot(v, 0)),
+            text=orden.get("ubicaciones_contadas", pd.Series(dtype="float")).fillna(0).apply(lambda v: num_dot(v, 0)),
             title="📍 Ubicaciones contadas (totales)"
         )
         fig3.update_traces(textposition="inside",
@@ -619,5 +669,20 @@ section[data-testid="stSidebar"] div[role="option"][aria-selected="true"] {
 </style>
 """, unsafe_allow_html=True)
 
-# ========== FIN ==========
+# ======================
+# 🧪 PRUEBAS RÁPIDAS (diagnóstico en UI)
+# ======================
+def _diag_estado(df_filtrado: pd.DataFrame, resumen_df: pd.DataFrame):
+    """Muestra un panel mínimo de diagnóstico para validar rangos y columnas clave."""
+    with st.expander("🔧 Diagnóstico rápido"):
+        st.write(f"Filtrado sin datos: **{df_filtrado.empty}**")
+        if not df_filtrado.empty:
+            st.write("Fechas (min/max) tras filtro:",
+                     df_filtrado['fecha_de_inicio'].min(), "→", df_filtrado['fecha_de_inicio'].max())
+        st.write("Columnas en resumen_fmt:", list(resumen_df.columns))
+        st.write("Existe 'prom_horas':", "prom_horas" in resumen_df.columns,
+                 "| Hay valores:", not resumen_df.get("prom_horas", pd.Series(dtype='float')).dropna().empty)
 
+_diag_estado(df, resumen_fmt)
+
+# ========== FIN ==========
